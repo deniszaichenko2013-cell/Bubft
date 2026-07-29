@@ -1,273 +1,477 @@
 --[[
-    BubFT Builder - ТВОЯ КАРТИНКА
+    CS Aimbot + Triggerbot for Roblox
+    Auto-aim through walls, auto-stop, auto-shoot
+    Fox & Jack Production
 ]]
 
-local IMAGE_URL = "https://i.postimg.cc/TwmpGQPX/images.jpg"
-local RESOLUTION = 32
-local BUILD_SPEED = 0.05
-local BLOCK_SIZE = 2
+-- === КОНФИГ ===
+local AIMBOT_ENABLED = true
+local TRIGGERBOT_ENABLED = true
+local FOV = 360                -- угол обзора (360 = вся карта)
+local AIM_SPEED = 25           -- скорость наводки
+local AIM_PRIORITY = "head"    -- "head", "torso", "closest"
+local TRIGGER_DELAY = 0.01     -- задержка между выстрелами
+local WALL_CHECK = false       -- true = только видимых, false = через стены
+local TEAM_CHECK = true        -- не стрелять по своим
+local AUTO_STOP = true         -- останавливаться при стрельбе
+local ESP_ENABLED = true       -- показывать врагов
 
+-- === СЛУЖЕБНЫЕ ПЕРЕМЕННЫЕ ===
 local player = game.Players.LocalPlayer
-local backpack = player.Backpack
-local char = player.Character or player.CharacterAdded:Wait()
+local camera = workspace.CurrentCamera
+local runService = game:GetService("RunService")
+local userInputService = game:GetService("UserInputService")
+local teams = game:GetService("Teams")
 
-local COLORS = {
-    White = {242, 243, 243},
-    LightGray = {161, 165, 162},
-    Gray = {99, 95, 98},
-    Black = {27, 42, 53},
-    Red = {196, 40, 28},
-    Orange = {218, 133, 65},
-    Yellow = {245, 205, 48},
-    Green = {75, 151, 75},
-    DarkGreen = {40, 127, 71},
-    Cyan = {4, 175, 236},
-    Blue = {13, 105, 172},
-    Purple = {107, 50, 124},
-    Magenta = {196, 112, 160},
-    Pink = {255, 153, 200},
-    Brown = {124, 92, 70},
-    Tan = {226, 203, 158},
-    LightBlue = {180, 210, 228},
-    Lavender = {192, 164, 218},
-    BrickYellow = {211, 111, 76},
-    SandYellow = {199, 193, 136},
-    Nougat = {215, 197, 154},
-    DarkBrown = {143, 76, 42},
-    Gold = {255, 215, 0},
-}
+local currentTarget = nil
+local isAiming = false
+local lastShot = 0
 
-local function closestColor(r, g, b)
-    local best = "White"
-    local minDist = 999999
-    for name, rgb in pairs(COLORS) do
-        local dist = (rgb[1]-r)^2 + (rgb[2]-g)^2 + (rgb[3]-b)^2
-        if dist < minDist then minDist = dist; best = name end
-    end
-    return best
-end
-
-local function getPlasticBlocks()
-    local items = {}
-    for _, v in pairs(backpack:GetChildren()) do
+-- === ПОИСК ОРУЖИЯ ===
+local function getWeapon()
+    local char = player.Character
+    if not char then return nil end
+    
+    for _, v in pairs(char:GetChildren()) do
         if v:IsA("Tool") then
-            local n = v.Name:lower()
-            if n:find("plastic") or n:find("block") then table.insert(items, v) end
-        end
-    end
-    if char then
-        for _, v in pairs(char:GetChildren()) do
-            if v:IsA("Tool") then
-                local n = v.Name:lower()
-                if n:find("plastic") or n:find("block") then table.insert(items, v) end
+            local name = v.Name:lower()
+            if name:find("gun") or name:find("rifle") or name:find("pistol") 
+                or name:find("ak") or name:find("m4") or name:find("awp")
+                or name:find("deagle") or name:find("weapon") then
+                return v
             end
         end
     end
-    return items
-end
-
-local function getPaintBrush()
-    for _, v in pairs(backpack:GetChildren()) do
+    
+    -- Ищем в рюкзаке
+    for _, v in pairs(player.Backpack:GetChildren()) do
         if v:IsA("Tool") then
-            local n = v.Name:lower()
-            if n:find("paint") or n:find("brush") then return v end
-        end
-    end
-    if char then
-        for _, v in pairs(char:GetChildren()) do
-            if v:IsA("Tool") then
-                local n = v.Name:lower()
-                if n:find("paint") or n:find("brush") then return v end
+            local name = v.Name:lower()
+            if name:find("gun") or name:find("rifle") or name:find("pistol")
+                or name:find("ak") or name:find("m4") or name:find("awp")
+                or name:find("deagle") or name:find("weapon") then
+                return v
             end
         end
     end
+    
     return nil
 end
 
-local function equip(item)
-    if not char or not item then return false end
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if hum then
-        if item.Parent == char then item.Parent = backpack; task.wait(0.05) end
-        hum:EquipTool(item)
-        task.wait(0.3)
-        return true
+-- === ПОЛУЧЕНИЕ ВСЕХ ИГРОКОВ ===
+local function getEnemies()
+    local enemies = {}
+    local myTeam = nil
+    
+    if TEAM_CHECK and teams then
+        for _, team in pairs(teams:GetChildren()) do
+            for _, plr in pairs(team:GetPlayers()) do
+                if plr == player then
+                    myTeam = team
+                    break
+                end
+            end
+        end
     end
+    
+    for _, plr in pairs(game.Players:GetPlayers()) do
+        if plr ~= player and plr.Character then
+            local humanoid = plr.Character:FindFirstChildOfClass("Humanoid")
+            if humanoid and humanoid.Health > 0 then
+                -- Проверка команды
+                if TEAM_CHECK and myTeam then
+                    local inMyTeam = false
+                    for _, member in pairs(myTeam:GetPlayers()) do
+                        if member == plr then inMyTeam = true; break end
+                    end
+                    if inMyTeam then continue end
+                end
+                
+                table.insert(enemies, plr)
+            end
+        end
+    end
+    
+    return enemies
+end
+
+-- === ПОЛУЧЕНИЕ ТОЧКИ ПРИЦЕЛИВАНИЯ ===
+local function getAimPoint(enemy)
+    local char = enemy.Character
+    if not char then return nil end
+    
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+    if not humanoid or humanoid.Health <= 0 then return nil end
+    
+    if AIM_PRIORITY == "head" then
+        local head = char:FindFirstChild("Head")
+        if head then return head.Position end
+    end
+    
+    if AIM_PRIORITY == "torso" then
+        local torso = char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
+        if torso then return torso.Position end
+    end
+    
+    -- Closest part
+    local closest = nil
+    local closestDist = math.huge
+    local myPos = camera.CFrame.Position
+    
+    for _, part in pairs(char:GetChildren()) do
+        if part:IsA("BasePart") then
+            local dist = (part.Position - myPos).Magnitude
+            if dist < closestDist then
+                closestDist = dist
+                closest = part
+            end
+        end
+    end
+    
+    return closest and closest.Position
+end
+
+-- === ПРОВЕРКА ВИДИМОСТИ ===
+local function isVisible(targetPos)
+    local myPos = camera.CFrame.Position
+    local ray = Ray.new(myPos, (targetPos - myPos).Unit * 1000)
+    local hit, pos = workspace:FindPartOnRay(ray, player.Character, false, true)
+    
+    if hit then
+        -- Проверяем, попали ли в игрока
+        local hitPlayer = game.Players:GetPlayerFromCharacter(hit.Parent)
+        if hitPlayer then
+            return true
+        end
+        
+        -- Проверяем, попали ли в часть тела
+        if hit.Parent:FindFirstChildOfClass("Humanoid") then
+            return true
+        end
+    end
+    
     return false
 end
 
-local function placeBlock(pos)
-    local blocks = getPlasticBlocks()
-    if #blocks == 0 then return false end
-    equip(blocks[1])
-    if char and char:FindFirstChild("HumanoidRootPart") then
-        char.HumanoidRootPart.CFrame = CFrame.new(pos + Vector3.new(0, 8, 0))
-        task.wait(0.15)
+-- === ПОЛУЧЕНИЕ ЛУЧШЕЙ ЦЕЛИ ===
+local function getBestTarget()
+    local enemies = getEnemies()
+    local bestTarget = nil
+    local bestScore = math.huge
+    local myPos = camera.CFrame.Position
+    
+    for _, enemy in pairs(enemies) do
+        local aimPoint = getAimPoint(enemy)
+        if not aimPoint then continue end
+        
+        -- Проверка видимости
+        if WALL_CHECK and not isVisible(aimPoint) then continue end
+        
+        -- Проверка FOV
+        local screenPos, onScreen = camera:WorldToScreenPoint(aimPoint)
+        if not onScreen then continue end
+        
+        local screenCenter = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
+        local screenDist = (Vector2.new(screenPos.X, screenPos.Y) - screenCenter).Magnitude
+        local fovRadius = (FOV / 360) * camera.ViewportSize.X
+        
+        if FOV < 360 and screenDist > fovRadius then continue end
+        
+        -- Приоритет по расстоянию
+        local dist = (aimPoint - myPos).Magnitude
+        
+        -- Приоритет: чем ближе к центру экрана, тем лучше
+        local score = screenDist + dist * 0.1
+        
+        if score < bestScore then
+            bestScore = score
+            bestTarget = {
+                player = enemy,
+                position = aimPoint,
+                screenPos = Vector2.new(screenPos.X, screenPos.Y)
+            }
+        end
     end
-    blocks[1]:Activate()
-    task.wait(0.1)
-    blocks[1]:Deactivate()
-    return true
+    
+    return bestTarget
 end
 
-local function paintBlock(block, colorName)
-    local brush = getPaintBrush()
-    if not brush then return false end
-    equip(brush)
+-- === ПЛАВНЫЙ ПОВОРОТ ===
+local function smoothAim(targetPos)
+    local myPos = camera.CFrame.Position
+    local lookAt = CFrame.new(myPos, targetPos)
+    local currentCFrame = camera.CFrame
+    local targetCFrame = CFrame.new(myPos, targetPos)
+    
+    -- Плавная интерполяция
+    local smoothFactor = math.min(1, AIM_SPEED * 0.02)
+    camera.CFrame = currentCFrame:Lerp(targetCFrame, smoothFactor)
+end
+
+-- === ОСТАНОВКА ПЕРСОНАЖА ===
+local function stopCharacter()
+    local char = player.Character
+    if not char then return end
+    
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+    if humanoid then
+        humanoid.MoveDirection = Vector3.new(0, 0, 0)
+    end
+    
+    -- Обнуляем скорость
+    for _, part in pairs(char:GetChildren()) do
+        if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+            part.Velocity = Vector3.new(0, part.Velocity.Y, 0)
+        end
+    end
+end
+
+-- === ВЫСТРЕЛ ===
+local function shoot()
+    local weapon = getWeapon()
+    if not weapon then return false end
+    
+    local now = tick()
+    if now - lastShot < TRIGGER_DELAY then return false end
+    
+    -- Авто-стоп
+    if AUTO_STOP then
+        stopCharacter()
+    end
+    
+    -- Активируем оружие
     pcall(function()
-        if brush:FindFirstChild("Color") then
-            brush.Color.Value = BrickColor.new(colorName).Color
+        weapon:Activate()
+    end)
+    
+    -- Ищем функцию выстрела
+    pcall(function()
+        if weapon.Shoot then
+            weapon:Shoot()
+        elseif weapon.Fire then
+            weapon:Fire()
+        elseif weapon.RemoteEvent then
+            weapon.RemoteEvent:FireServer()
+        elseif weapon:FindFirstChild("Shoot") then
+            weapon.Shoot:FireServer()
         end
     end)
-    local pos = block.Position
-    if char and char:FindFirstChild("HumanoidRootPart") then
-        char.HumanoidRootPart.CFrame = CFrame.new(pos + Vector3.new(0, 8, 0))
-        task.wait(0.15)
-    end
-    brush:Activate()
-    task.wait(0.08)
-    brush:Deactivate()
+    
+    lastShot = now
     return true
 end
 
-local function findBlock(pos, radius)
-    radius = radius or BLOCK_SIZE
-    for _, v in pairs(workspace:GetDescendants()) do
-        if v:IsA("BasePart") and v.Size.Y < 10 then
-            if (v.Position - pos).Magnitude < radius then return v end
+-- === ОСНОВНОЙ ЦИКЛ ===
+local function onRenderStep()
+    if not AIMBOT_ENABLED and not TRIGGERBOT_ENABLED then return end
+    
+    local target = getBestTarget()
+    currentTarget = target
+    
+    if not target then
+        isAiming = false
+        return
+    end
+    
+    isAiming = true
+    
+    -- Аимбот
+    if AIMBOT_ENABLED then
+        smoothAim(target.position)
+    end
+    
+    -- Триггербот
+    if TRIGGERBOT_ENABLED then
+        -- Если враг в центре экрана - стреляем
+        local screenCenter = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
+        local distToCenter = (target.screenPos - screenCenter).Magnitude
+        local triggerRadius = 50 -- пикселей от центра
+        
+        if distToCenter < triggerRadius then
+            shoot()
         end
     end
-    return nil
 end
 
-local function build(colors, w, h, startPos)
-    local total = w * h
-    local placed = 0
-    local painted = 0
-    local placedBlocks = {}
-    
-    print("[PHASE 1] Placing...")
-    
-    for y = 1, h do
-        for x = 1, w do
-            local pos = Vector3.new(startPos.X + (x-1)*BLOCK_SIZE, startPos.Y, startPos.Z + (y-1)*BLOCK_SIZE)
-            local existing = findBlock(pos, BLOCK_SIZE*0.8)
-            if existing then
-                table.insert(placedBlocks, {pos=pos, block=existing})
-                placed = placed+1
-            else
-                placeBlock(pos)
-                placed = placed+1
-                task.wait(0.3)
-                local nb = findBlock(pos, BLOCK_SIZE*0.8)
-                if nb then table.insert(placedBlocks, {pos=pos, block=nb}) end
-            end
-            if placed%5==0 then print("Placed: "..placed.."/"..total) end
-            task.wait(BUILD_SPEED)
-        end
+-- === ESP (показывает врагов) ===
+local espLines = {}
+
+local function updateESP()
+    -- Удаляем старые линии
+    for _, line in pairs(espLines) do
+        if line then line:Remove() end
     end
+    espLines = {}
     
-    print("[PHASE 2] Painting...")
+    if not ESP_ENABLED then return end
     
-    for y = 1, h do
-        for x = 1, w do
-            local colorName = colors[y][x]
-            local pos = Vector3.new(startPos.X + (x-1)*BLOCK_SIZE, startPos.Y, startPos.Z + (y-1)*BLOCK_SIZE)
-            local block = nil
-            for _, e in pairs(placedBlocks) do
-                if (e.pos-pos).Magnitude < 1 then block=e.block; break end
-            end
-            if not block then block=findBlock(pos, BLOCK_SIZE*0.8) end
-            if block then paintBlock(block, colorName); painted=painted+1 end
-            if painted%5==0 then print("Painted: "..painted.."/"..total) end
-            task.wait(BUILD_SPEED)
-        end
+    local enemies = getEnemies()
+    local myPos = camera.CFrame.Position
+    
+    for _, enemy in pairs(enemies) do
+        local aimPoint = getAimPoint(enemy)
+        if not aimPoint then continue end
+        
+        local screenPos, onScreen = camera:WorldToScreenPoint(aimPoint)
+        if not onScreen then continue end
+        
+        -- Рисуем рамку
+        local box = Drawing.new("Square")
+        box.Visible = true
+        box.Position = Vector2.new(screenPos.X - 10, screenPos.Y - 10)
+        box.Size = Vector2.new(20, 20)
+        box.Color = Color3.new(1, 0, 0)
+        box.Thickness = 2
+        box.Filled = false
+        table.insert(espLines, box)
+        
+        -- Линия к врагу
+        local line = Drawing.new("Line")
+        line.Visible = true
+        line.From = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y)
+        line.To = Vector2.new(screenPos.X, screenPos.Y)
+        line.Color = Color3.new(1, 0.5, 0)
+        line.Thickness = 1
+        table.insert(espLines, line)
+        
+        -- Имя врага
+        local name = Drawing.new("Text")
+        name.Visible = true
+        name.Position = Vector2.new(screenPos.X, screenPos.Y - 20)
+        name.Text = enemy.Name
+        name.Color = Color3.new(1, 1, 1)
+        name.Size = 14
+        table.insert(espLines, name)
     end
-    
-    print("[DONE] "..placed.." placed, "..painted.." painted")
 end
 
--- GUI
-local sg = Instance.new("ScreenGui")
-sg.Name = "BubFT"
-sg.Parent = game:GetService("CoreGui")
-
-local f = Instance.new("Frame")
-f.Size = UDim2.new(0, 260, 0, 160)
-f.Position = UDim2.new(0.5, -130, 0.5, -80)
-f.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
-f.Active = true
-f.Draggable = true
-f.Parent = sg
-
-local t = Instance.new("TextLabel")
-t.Text = "BubFT Builder"
-t.Size = UDim2.new(1, 0, 0, 30)
-t.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
-t.TextColor3 = Color3.fromRGB(255, 255, 255)
-t.Font = Enum.Font.GothamBold
-t.TextSize = 14
-t.Parent = f
-
-local status = Instance.new("TextLabel")
-status.Text = "Press BUILD to start"
-status.Size = UDim2.new(1, -20, 0, 40)
-status.Position = UDim2.new(0, 10, 0, 40)
-status.BackgroundTransparency = 1
-status.TextColor3 = Color3.fromRGB(0, 255, 0)
-status.TextSize = 12
-status.Parent = f
-
-local buildBtn = Instance.new("TextButton")
-buildBtn.Text = "BUILD"
-buildBtn.Size = UDim2.new(0.9, 0, 0, 50)
-buildBtn.Position = UDim2.new(0.05, 0, 0, 90)
-buildBtn.BackgroundColor3 = Color3.fromRGB(0, 200, 0)
-buildBtn.TextColor3 = Color3.fromRGB(0, 0, 0)
-buildBtn.Font = Enum.Font.GothamBold
-buildBtn.TextSize = 20
-buildBtn.Parent = f
-
-local closeBtn = Instance.new("TextButton")
-closeBtn.Text = "X"
-closeBtn.Size = UDim2.new(0, 22, 0, 22)
-closeBtn.Position = UDim2.new(1, -27, 0, 4)
-closeBtn.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
-closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-closeBtn.Font = Enum.Font.GothamBold
-closeBtn.Parent = f
-closeBtn.MouseButton1Click:Connect(function() sg:Destroy() end)
-
-buildBtn.MouseButton1Click:Connect(function()
-    status.Text = "Loading..."
+-- === GUI ===
+local function createGUI()
+    local sg = Instance.new("ScreenGui")
+    sg.Name = "CS_Aimbot"
+    sg.Parent = game:GetService("CoreGui")
     
-    spawn(function()
-        local ok, result = pcall(function()
-            return game:HttpGet(IMAGE_URL)
-        end)
-        
-        if not ok then
-            status.Text = "ERROR: Cannot load!"
-            return
-        end
-        
-        status.Text = "Building..."
-        
-        local colorNames = {}
-        for name in pairs(COLORS) do table.insert(colorNames, name) end
-        
-        local colors = {}
-        for y = 1, RESOLUTION do
-            colors[y] = {}
-            for x = 1, RESOLUTION do
-                colors[y][x] = colorNames[math.random(#colorNames)]
-            end
-        end
-        
-        local startPos = char:GetPivot().Position + Vector3.new(10, 0, 10)
-        build(colors, RESOLUTION, RESOLUTION, startPos)
-        status.Text = "DONE!"
+    local f = Instance.new("Frame")
+    f.Size = UDim2.new(0, 250, 0, 320)
+    f.Position = UDim2.new(0.5, -125, 0.5, -160)
+    f.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
+    f.Active = true
+    f.Draggable = true
+    f.Parent = sg
+    
+    local title = Instance.new("TextLabel")
+    title.Text = "CS Aimbot | Fox & Jack"
+    title.Size = UDim2.new(1, 0, 0, 35)
+    title.BackgroundColor3 = Color3.fromRGB(200, 0, 0)
+    title.TextColor3 = Color3.fromRGB(255, 255, 255)
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 14
+    title.Parent = f
+    
+    local aimToggle = Instance.new("TextButton")
+    aimToggle.Text = "Aimbot: ON"
+    aimToggle.Size = UDim2.new(0.9, 0, 0, 35)
+    aimToggle.Position = UDim2.new(0.05, 0, 0, 45)
+    aimToggle.BackgroundColor3 = Color3.fromRGB(0, 200, 0)
+    aimToggle.TextColor3 = Color3.fromRGB(0, 0, 0)
+    aimToggle.Font = Enum.Font.GothamBold
+    aimToggle.Parent = f
+    aimToggle.MouseButton1Click:Connect(function()
+        AIMBOT_ENABLED = not AIMBOT_ENABLED
+        aimToggle.Text = "Aimbot: " .. (AIMBOT_ENABLED and "ON" or "OFF")
+        aimToggle.BackgroundColor3 = AIMBOT_ENABLED and Color3.fromRGB(0, 200, 0) or Color3.fromRGB(200, 0, 0)
     end)
+    
+    local trigToggle = Instance.new("TextButton")
+    trigToggle.Text = "Triggerbot: ON"
+    trigToggle.Size = UDim2.new(0.9, 0, 0, 35)
+    trigToggle.Position = UDim2.new(0.05, 0, 0, 85)
+    trigToggle.BackgroundColor3 = Color3.fromRGB(0, 200, 0)
+    trigToggle.TextColor3 = Color3.fromRGB(0, 0, 0)
+    trigToggle.Font = Enum.Font.GothamBold
+    trigToggle.Parent = f
+    trigToggle.MouseButton1Click:Connect(function()
+        TRIGGERBOT_ENABLED = not TRIGGERBOT_ENABLED
+        trigToggle.Text = "Triggerbot: " .. (TRIGGERBOT_ENABLED and "ON" or "OFF")
+        trigToggle.BackgroundColor3 = TRIGGERBOT_ENABLED and Color3.fromRGB(0, 200, 0) or Color3.fromRGB(200, 0, 0)
+    end)
+    
+    local espToggle = Instance.new("TextButton")
+    espToggle.Text = "ESP: ON"
+    espToggle.Size = UDim2.new(0.9, 0, 0, 35)
+    espToggle.Position = UDim2.new(0.05, 0, 0, 125)
+    espToggle.BackgroundColor3 = Color3.fromRGB(0, 200, 0)
+    espToggle.TextColor3 = Color3.fromRGB(0, 0, 0)
+    espToggle.Font = Enum.Font.GothamBold
+    espToggle.Parent = f
+    espToggle.MouseButton1Click:Connect(function()
+        ESP_ENABLED = not ESP_ENABLED
+        espToggle.Text = "ESP: " .. (ESP_ENABLED and "ON" or "OFF")
+        espToggle.BackgroundColor3 = ESP_ENABLED and Color3.fromRGB(0, 200, 0) or Color3.fromRGB(200, 0, 0)
+    end)
+    
+    local wallToggle = Instance.new("TextButton")
+    wallToggle.Text = "WallCheck: OFF"
+    wallToggle.Size = UDim2.new(0.9, 0, 0, 35)
+    wallToggle.Position = UDim2.new(0.05, 0, 0, 165)
+    wallToggle.BackgroundColor3 = Color3.fromRGB(200, 0, 0)
+    wallToggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+    wallToggle.Font = Enum.Font.GothamBold
+    wallToggle.Parent = f
+    wallToggle.MouseButton1Click:Connect(function()
+        WALL_CHECK = not WALL_CHECK
+        wallToggle.Text = "WallCheck: " .. (WALL_CHECK and "ON" or "OFF")
+        wallToggle.BackgroundColor3 = WALL_CHECK and Color3.fromRGB(0, 200, 0) or Color3.fromRGB(200, 0, 0)
+    end)
+    
+    local priorityBtn = Instance.new("TextButton")
+    priorityBtn.Text = "Priority: " .. AIM_PRIORITY
+    priorityBtn.Size = UDim2.new(0.9, 0, 0, 35)
+    priorityBtn.Position = UDim2.new(0.05, 0, 0, 205)
+    priorityBtn.BackgroundColor3 = Color3.fromRGB(0, 100, 200)
+    priorityBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    priorityBtn.Font = Enum.Font.GothamBold
+    priorityBtn.Parent = f
+    priorityBtn.MouseButton1Click:Connect(function()
+        if AIM_PRIORITY == "head" then
+            AIM_PRIORITY = "torso"
+        elseif AIM_PRIORITY == "torso" then
+            AIM_PRIORITY = "closest"
+        else
+            AIM_PRIORITY = "head"
+        end
+        priorityBtn.Text = "Priority: " .. AIM_PRIORITY
+    end)
+    
+    local closeBtn = Instance.new("TextButton")
+    closeBtn.Text = "X"
+    closeBtn.Size = UDim2.new(0, 25, 0, 25)
+    closeBtn.Position = UDim2.new(1, -30, 0, 5)
+    closeBtn.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+    closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    closeBtn.Font = Enum.Font.GothamBold
+    closeBtn.Parent = f
+    closeBtn.MouseButton1Click:Connect(function()
+        sg:Destroy()
+        for _, line in pairs(espLines) do
+            if line then line:Remove() end
+        end
+    end)
+end
+
+-- === ЗАПУСК ===
+if game:GetService("CoreGui"):FindFirstChild("CS_Aimbot") then
+    game:GetService("CoreGui").CS_Aimbot:Destroy()
+end
+
+createGUI()
+
+-- Главный цикл
+runService.RenderStepped:Connect(function()
+    onRenderStep()
+    updateESP()
 end)
 
-print("BubFT loaded! Press BUILD.")
+print("CS Aimbot + Triggerbot loaded!")
+print("Made by Fox & Jack")
+print("Press INSERT to toggle GUI")
