@@ -1,7 +1,6 @@
 --[[
-    CS HACK PC EDITION
-    Для Solara / Delta (Windows)
-    Instant Aimbot | Triggerbot | BunnyHop | ESP | WallHack
+    CS Aimbot PC - Fixed
+    Меню: Правый Shift
 ]]
 
 local player = game.Players.LocalPlayer
@@ -10,57 +9,29 @@ local runService = game:GetService("RunService")
 local uis = game:GetService("UserInputService")
 
 -- Настройки
-local settings = {
-    aimbot = true,
-    triggerbot = false,
-    bhop = false,
-    esp = false,
-    wallhack = false,
-    aimSpeed = 1, -- 1 = мгновенно
-    fov = 9999
-}
+local aimbot = true
+local triggerbot = false
+local bhop = false
+local showMenu = true
 
-local lastShot = 0
-local whData = {}
-
--- === ПОЛУЧЕНИЕ ОРУЖИЯ ===
-local function getTool()
-    local char = player.Character
-    if char then
-        for _, v in pairs(char:GetChildren()) do
-            if v:IsA("Tool") then return v end
-        end
-    end
-    return nil
-end
-
--- === ПОЛУЧЕНИЕ ВРАГОВ ===
-local function getEnemies()
-    local list = {}
+-- Поиск врага
+local function findTarget()
+    local best = nil
+    local bestDist = 9999
+    local myPos = camera.CFrame.Position
+    
     for _, p in pairs(game.Players:GetPlayers()) do
         if p ~= player and p.Character then
             local hum = p.Character:FindFirstChildOfClass("Humanoid")
             if hum and hum.Health > 0 then
-                table.insert(list, p)
-            end
-        end
-    end
-    return list
-end
-
--- === БЛИЖАЙШИЙ ВРАГ ===
-local function findTarget()
-    local best = nil
-    local bestDist = settings.fov
-    local myPos = camera.CFrame.Position
-    
-    for _, p in pairs(getEnemies()) do
-        local head = p.Character:FindFirstChild("Head")
-        if head then
-            local dist = (head.Position - myPos).Magnitude
-            if dist < bestDist then
-                bestDist = dist
-                best = head
+                local head = p.Character:FindFirstChild("Head")
+                if head then
+                    local dist = (head.Position - myPos).Magnitude
+                    if dist < bestDist then
+                        bestDist = dist
+                        best = head
+                    end
+                end
             end
         end
     end
@@ -68,31 +39,39 @@ local function findTarget()
     return best
 end
 
--- === INSTANT AIMBOT ===
+-- Мгновенный аимбот
 local function doAimbot()
-    if not settings.aimbot then return end
+    if not aimbot then return end
     local target = findTarget()
     if target then
         camera.CFrame = CFrame.lookAt(camera.CFrame.Position, target.Position)
     end
 end
 
--- === TRIGGERBOT ===
-local function doTriggerbot()
-    if not settings.triggerbot then return end
+-- Триггербот
+local lastShot = 0
+local function doTrigger()
+    if not triggerbot then return end
     if tick() - lastShot < 0.1 then return end
     
-    local target = findTarget()
-    if not target then return end
+    local char = player.Character
+    if not char then return end
     
-    local screenPos, onScreen = camera:WorldToScreenPoint(target.Position)
-    if onScreen then
-        local center = Vector2.new(camera.ViewportSize.X/2, camera.ViewportSize.Y/2)
-        local dist = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
-        
-        if dist < 70 then
-            local tool = getTool()
-            if tool then
+    local tool = nil
+    for _, v in pairs(char:GetChildren()) do
+        if v:IsA("Tool") then tool = v; break end
+    end
+    
+    if not tool then return end
+    
+    local target = findTarget()
+    if target then
+        local pos, onScreen = camera:WorldToScreenPoint(target.Position)
+        if onScreen then
+            local cx = camera.ViewportSize.X / 2
+            local cy = camera.ViewportSize.Y / 2
+            local dist = math.sqrt((pos.X - cx)^2 + (pos.Y - cy)^2)
+            if dist < 80 then
                 tool:Activate()
                 lastShot = tick()
             end
@@ -100,9 +79,9 @@ local function doTriggerbot()
     end
 end
 
--- === BUNNYHOP ===
+-- BunnyHop
 local function doBHop()
-    if not settings.bhop then return end
+    if not bhop then return end
     
     local char = player.Character
     if not char then return end
@@ -122,161 +101,89 @@ local function doBHop()
     end
 end
 
--- === ESP ===
-local espObjects = {}
-
-local function updateESP()
-    for _, obj in pairs(espObjects) do
-        if obj then pcall(function() obj:Remove() end) end
-    end
-    espObjects = {}
-    
-    if not settings.esp then return end
-    
-    for _, p in pairs(getEnemies()) do
-        local head = p.Character:FindFirstChild("Head")
-        if head then
-            local pos, onScreen = camera:WorldToScreenPoint(head.Position)
-            if onScreen then
-                -- Рамка
-                local box = Drawing.new("Square")
-                box.Visible = true
-                box.Position = Vector2.new(pos.X - 15, pos.Y - 15)
-                box.Size = Vector2.new(30, 30)
-                box.Color = Color3.fromRGB(255, 0, 0)
-                box.Thickness = 2
-                box.Filled = false
-                table.insert(espObjects, box)
-                
-                -- Имя
-                local name = Drawing.new("Text")
-                name.Visible = true
-                name.Position = Vector2.new(pos.X - 20, pos.Y - 35)
-                name.Text = p.Name
-                name.Color = Color3.fromRGB(255, 255, 255)
-                name.Size = 14
-                name.Center = true
-                table.insert(espObjects, name)
-            end
-        end
-    end
-end
-
--- === WALLHACK ===
-local function doWallHack()
-    if settings.wallhack then
-        for _, v in pairs(workspace:GetDescendants()) do
-            if v:IsA("BasePart") and v.Transparency < 0.3 and not whData[v] then
-                whData[v] = v.Transparency
-                v.Transparency = 0.7
-            end
-        end
-    else
-        for obj, orig in pairs(whData) do
-            if obj then pcall(function() obj.Transparency = orig end) end
-        end
-        whData = {}
-    end
-end
-
 -- === GUI ===
-local function createGUI()
-    local core = game:GetService("CoreGui")
-    if core:FindFirstChild("CS_Hack_PC") then
-        core.CS_Hack_PC:Destroy()
-        for _, obj in pairs(espObjects) do
-            if obj then pcall(function() obj:Remove() end) end
-        end
-        settings.wallhack = false
-        doWallHack()
-    end
+local sg = Instance.new("ScreenGui")
+sg.Name = "CS_Menu"
+sg.Parent = game:GetService("CoreGui")
+sg.ResetOnSpawn = false
+
+local main = Instance.new("Frame")
+main.Name = "MainFrame"
+main.Size = UDim2.new(0, 200, 0, 180)
+main.Position = UDim2.new(0.5, -100, 0.5, -90)
+main.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
+main.BorderSizePixel = 0
+main.Active = true
+main.Draggable = true
+main.Visible = showMenu
+main.Parent = sg
+
+local title = Instance.new("TextLabel")
+title.Text = "CS AIMBOT"
+title.Size = UDim2.new(1, 0, 0, 30)
+title.BackgroundColor3 = Color3.fromRGB(200, 0, 0)
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.Font = Enum.Font.GothamBold
+title.TextSize = 16
+title.Parent = main
+
+local y = 38
+
+local function addButton(name, default, callback)
+    local btn = Instance.new("TextButton")
+    btn.Text = name .. ": " .. (default and "ON" or "OFF")
+    btn.Size = UDim2.new(0.9, 0, 0, 35)
+    btn.Position = UDim2.new(0.05, 0, 0, y)
+    btn.BackgroundColor3 = default and Color3.fromRGB(0, 170, 0) or Color3.fromRGB(170, 0, 0)
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 14
+    btn.Parent = main
     
-    local sg = Instance.new("ScreenGui")
-    sg.Name = "CS_Hack_PC"
-    sg.Parent = core
-    sg.ResetOnSpawn = false
-    
-    local main = Instance.new("Frame")
-    main.Size = UDim2.new(0, 220, 0, 270)
-    main.Position = UDim2.new(0.5, -110, 0.5, -135)
-    main.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
-    main.BorderSizePixel = 0
-    main.Active = true
-    main.Draggable = true
-    main.Parent = sg
-    
-    local title = Instance.new("TextLabel")
-    title.Text = "CS HACK PC"
-    title.Size = UDim2.new(1, 0, 0, 32)
-    title.BackgroundColor3 = Color3.fromRGB(180, 0, 0)
-    title.TextColor3 = Color3.fromRGB(255, 255, 255)
-    title.Font = Enum.Font.GothamBold
-    title.TextSize = 16
-    title.Parent = main
-    
-    local yPos = 40
-    
-    local buttons = {
-        {"Instant Aimbot", "aimbot", true},
-        {"Triggerbot", "triggerbot", false},
-        {"BunnyHop", "bhop", false},
-        {"ESP", "esp", false},
-        {"WallHack", "wallhack", false},
-    }
-    
-    for _, btn in pairs(buttons) do
-        local name = btn[1]
-        local key = btn[2]
-        local default = btn[3]
-        
-        local b = Instance.new("TextButton")
-        b.Text = name .. ": " .. (default and "ON" or "OFF")
-        b.Size = UDim2.new(0.9, 0, 0, 35)
-        b.Position = UDim2.new(0.05, 0, 0, yPos)
-        b.BackgroundColor3 = default and Color3.fromRGB(0, 170, 0) or Color3.fromRGB(170, 0, 0)
-        b.TextColor3 = Color3.fromRGB(255, 255, 255)
-        b.Font = Enum.Font.GothamBold
-        b.TextSize = 14
-        b.Parent = main
-        
-        b.MouseButton1Click:Connect(function()
-            settings[key] = not settings[key]
-            b.Text = name .. ": " .. (settings[key] and "ON" or "OFF")
-            b.BackgroundColor3 = settings[key] and Color3.fromRGB(0, 170, 0) or Color3.fromRGB(170, 0, 0)
-            
-            if key == "wallhack" then doWallHack() end
-            if key == "esp" then updateESP() end
-        end)
-        
-        yPos = yPos + 40
-    end
-    
-    local close = Instance.new("TextButton")
-    close.Text = "X"
-    close.Size = UDim2.new(0, 25, 0, 25)
-    close.Position = UDim2.new(1, -30, 0, 3)
-    close.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
-    close.TextColor3 = Color3.fromRGB(255, 255, 255)
-    close.Font = Enum.Font.GothamBold
-    close.Parent = main
-    close.MouseButton1Click:Connect(function()
-        settings.wallhack = false
-        doWallHack()
-        settings.esp = false
-        updateESP()
-        sg:Destroy()
+    local state = default
+    btn.MouseButton1Click:Connect(function()
+        state = not state
+        btn.Text = name .. ": " .. (state and "ON" or "OFF")
+        btn.BackgroundColor3 = state and Color3.fromRGB(0, 170, 0) or Color3.fromRGB(170, 0, 0)
+        callback(state)
     end)
+    
+    y = y + 40
 end
 
--- === СТАРТ ===
-createGUI()
+addButton("Aimbot", true, function(v) aimbot = v end)
+addButton("Triggerbot", false, function(v) triggerbot = v end)
+addButton("BunnyHop", false, function(v) bhop = v end)
 
-runService.RenderStepped:Connect(function()
-    pcall(doAimbot)
-    pcall(doTriggerbot)
-    pcall(doBHop)
-    pcall(updateESP)
+-- Кнопка закрыть
+local close = Instance.new("TextButton")
+close.Text = "X"
+close.Size = UDim2.new(0, 25, 0, 25)
+close.Position = UDim2.new(1, -30, 0, 3)
+close.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+close.TextColor3 = Color3.fromRGB(255, 255, 255)
+close.Font = Enum.Font.GothamBold
+close.Parent = main
+close.MouseButton1Click:Connect(function()
+    showMenu = false
+    main.Visible = false
 end)
 
-print("CS HACK PC LOADED!")
-print("Aimbot | Triggerbot | BHop | ESP | WallHack")
+-- Переключение меню на Правый Shift
+uis.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.KeyCode == Enum.KeyCode.RightShift then
+        showMenu = not showMenu
+        main.Visible = showMenu
+    end
+end)
+
+-- Главный цикл
+runService.RenderStepped:Connect(function()
+    pcall(doAimbot)
+    pcall(doTrigger)
+    pcall(doBHop)
+end)
+
+print("CS Aimbot loaded!")
+print("Press Right Shift to toggle menu")
